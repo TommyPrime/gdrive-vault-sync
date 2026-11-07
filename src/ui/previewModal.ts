@@ -19,6 +19,8 @@ const LABELS: { type: SyncAction["type"]; label: string }[] = [
   { type: "trashRemote", label: "Drive のごみ箱へ" },
   { type: "trashLocal", label: "端末の .trash/ へ" },
   { type: "deferred", label: "編集中のため次回へ" },
+  { type: "renameDuplicate", label: "Drive の重複を競合コピーへ" },
+  { type: "trashDuplicate", label: "同じ内容の重複を Drive のごみ箱へ" },
 ];
 
 export function reasonText(reason: SafetyReason): string {

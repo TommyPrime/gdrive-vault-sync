@@ -73,11 +73,11 @@ class Device {
   }
 
   /** approve はプレビューでの承認にあたる。halt は承認しても実行しない。 */
-  async sync(options: { approve?: boolean; dryRun?: boolean } = {}) {
+  async sync(options: { approve?: boolean; dryRun?: boolean; auto?: boolean } = {}) {
     // 同期の前に時間を進め、直前の編集が「3 秒以内」に当たらないようにする。
     this.clock.now += 10_000;
     this.approve = options.approve ?? false;
-    return this.engine.run({ dryRun: options.dryRun });
+    return this.engine.run({ dryRun: options.dryRun, interactive: !options.auto });
   }
 
   verify() {
@@ -471,5 +471,115 @@ describe("複数端末", () => {
         expect(Object.values(a.vault.snapshot())).toContain(text);
       }
     }
+  });
+
+  describe("同じパスのファイルが Drive に 2 つできたとき（Q9）", () => {
+    /** 2 台が互いの結果を見ないまま同じパスの新規ファイルを上げた状態を作る。 */
+    async function raceNewFile(path: string, textA: string, textB: string) {
+      // 1 件の削除が 10% を超えて確認に回らないよう、ノートを増やす。
+      await connectBoth(Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`${i}.md`, `${i}`])));
+      a.vault.edit(path, textA);
+      b.vault.edit(path, textB);
+      clock.now += 10_000;
+      await Promise.all([a.sync(), b.sync()]);
+      expect((await drive.listAll()).filter((file) => file.path === path)).toHaveLength(2);
+    }
+
+    const settle = async () => {
+      for (const device of [a, b, a, b]) await device.sync();
+    };
+
+    it("内容が違えば両方の内容が両方の端末に残り、Drive の重複は解消する", async () => {
+      await raceNewFile("new.md", "from Mac", "from Windows");
+      await settle();
+
+      const texts = Object.values(a.vault.snapshot());
+      expect(texts).toContain("from Mac");
+      expect(texts).toContain("from Windows");
+      expect(a.vault.snapshot()).toEqual(b.vault.snapshot());
+      expect(a.vault.paths().filter((path) => path.startsWith("new"))).toHaveLength(2);
+
+      const files = await drive.listAll();
+      expect(new Set(files.map((file) => file.path)).size).toBe(files.length);
+      expect(drive.trashedPaths()).toEqual([]);
+    });
+
+    it("内容が同じなら 1 つだけ残し、もう一方はごみ箱へ移す", async () => {
+      await raceNewFile("new.md", "same", "same");
+      await settle();
+
+      expect(a.vault.paths().filter((path) => path.startsWith("new"))).toEqual(["new.md"]);
+      expect(a.vault.snapshot()).toEqual(b.vault.snapshot());
+      expect(drive.trashedPaths()).toEqual(["new.md"]);
+    });
+
+    it("試行では Drive を変えない", async () => {
+      await raceNewFile("new.md", "from Mac", "from Windows");
+      const { plan } = await a.sync({ dryRun: true });
+
+      expect(plan?.actions.map((action) => action.type)).toContain("renameDuplicate");
+      expect((await drive.listAll()).filter((file) => file.path === "new.md")).toHaveLength(2);
+    });
+
+    it("2 台が同時に整理しても内容を失わない", async () => {
+      await raceNewFile("new.md", "from Mac", "from Windows");
+      await a.sync({ dryRun: true });
+      clock.now += 10_000;
+      await Promise.all([a.sync(), b.sync()]);
+      await settle();
+
+      expect(Object.values(a.vault.snapshot())).toContain("from Mac");
+      expect(Object.values(a.vault.snapshot())).toContain("from Windows");
+      expect(a.vault.snapshot()).toEqual(b.vault.snapshot());
+    });
+  });
+
+  describe("自動実行", () => {
+    it("初回は確認画面を開かず、何も書かずに止まる", async () => {
+      a.vault.edit("a.md", "1");
+      const { status } = await a.sync({ auto: true });
+
+      expect(status).toBe("needs-confirm");
+      expect(a.confirmCalls).toBe(0);
+      expect(drive.list().size).toBe(0);
+      expect(drive.vaultId).toBeNull();
+    });
+
+    it("手動で承認した後は自動で動く", async () => {
+      await connectBoth({ "a.md": "1", "b.md": "2", "c.md": "3" });
+      a.vault.edit("a.md", "2");
+      await a.sync({ auto: true });
+      await b.sync({ auto: true });
+      expect(b.vault.text("a.md")).toBe("2");
+    });
+
+    it("削除が多いときは確認画面を開かず、何も消さずに止まる", async () => {
+      await connectBoth({ "a.md": "1", "b.md": "2", "c.md": "3" });
+      a.vault.remove("a.md");
+      a.vault.remove("b.md");
+      const confirmed = a.confirmCalls;
+      const { status, safety } = await a.sync({ auto: true });
+
+      expect(status).toBe("needs-confirm");
+      expect(safety?.reasons).toEqual(["too-many-deletes"]);
+      expect(a.confirmCalls).toBe(confirmed);
+      expect(driveHas("a.md")).toBe(true);
+      expect(driveHas("b.md")).toBe(true);
+    });
+  });
+
+  describe("競合コピーの数", () => {
+    it("端末に残っている競合コピーを数える", async () => {
+      await connectBoth({ "a.md": "1", "b.md": "2", "c.md": "3" });
+      a.vault.edit("a.md", "mac");
+      b.vault.edit("a.md", "win");
+      await a.sync();
+      expect((await b.sync()).conflictCopies).toBe(1);
+      expect((await b.sync()).conflictCopies).toBe(1);
+
+      const copy = b.vault.paths().find((path) => path.includes("(conflict"))!;
+      b.vault.remove(copy);
+      expect((await b.sync()).conflictCopies).toBe(0);
+    });
   });
 });

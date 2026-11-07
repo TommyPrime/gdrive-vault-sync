@@ -69,7 +69,10 @@ export function evaluateSafety(input: SafetyInput): SafetyResult {
   if (base.size === 0) confirms.push("first-sync");
 
   const deletes = plan.actions.filter(
-    (action) => action.type === "trashRemote" || action.type === "trashLocal",
+    (action) =>
+      action.type === "trashRemote" ||
+      action.type === "trashLocal" ||
+      action.type === "trashDuplicate",
   ).length;
   const ratio = plan.totalPaths > 0 ? deletes / plan.totalPaths : 0;
   if (deletes > deleteCount || ratio > deleteRatio) confirms.push("too-many-deletes");

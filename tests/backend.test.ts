@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { GoogleDriveBackend } from "../src/drive/backend";
 import type { DriveClient, DriveFile } from "../src/drive/client";
-import { encodePathProps } from "../src/drive/pathProps";
+import { decodePathProps, encodePathProps } from "../src/drive/pathProps";
 
 function fakeClient(overrides: Partial<DriveClient> = {}) {
   let n = 0;
@@ -128,5 +128,23 @@ describe("一覧の変換", () => {
       ],
       pageToken: "2",
     });
+  });
+});
+
+describe("rename", () => {
+  it("名前とパスを変え、長いパスも読み戻せる", async () => {
+    const renameFile = vi.fn(async () => undefined);
+    const backend = new GoogleDriveBackend(fakeClient({ renameFile }), "O", "V");
+    const path = `日記/${"長い名前".repeat(30)} (conflict 2026-11-07 1630 Mac).md`;
+    await backend.rename("f", path);
+
+    const [id, name, props] = renameFile.mock.calls[0] as unknown as [
+      string,
+      string,
+      Record<string, string>,
+    ];
+    expect(id).toBe("f");
+    expect(name).toBe(`${"長い名前".repeat(30)} (conflict 2026-11-07 1630 Mac).md`);
+    expect(decodePathProps(props)).toBe(path);
   });
 });

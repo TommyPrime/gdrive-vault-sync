@@ -1,6 +1,7 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
 import type GDriveVaultSyncPlugin from "./main";
 import { DEFAULT_THRESHOLDS } from "./sync/safety";
+import { DEFAULT_INTERVAL_SEC } from "./sync/scheduler";
 
 /**
  * data.json に入る設定。data.json は Vault の .obsidian/ 内にあり、同期で他の端末へ渡る。
@@ -12,12 +13,15 @@ export interface GDriveVaultSyncSettings {
   deleteRatio: number;
   /** 削除がこの件数を超えたら確認する。 */
   deleteCount: number;
+  /** 自動同期の間隔。0 で自動同期を止める。 */
+  syncIntervalSec: number;
 }
 
 export const DEFAULT_SETTINGS: GDriveVaultSyncSettings = {
   driveRootFolder: "Obsidian",
   deleteRatio: DEFAULT_THRESHOLDS.deleteRatio,
   deleteCount: DEFAULT_THRESHOLDS.deleteCount,
+  syncIntervalSec: DEFAULT_INTERVAL_SEC,
 };
 
 /** app.saveLocalStorage のキー。端末ごとに保存し、Vault には書かない。 */
@@ -27,6 +31,8 @@ export const LocalKeys = {
   tokens: "gdrive-vault-sync:tokens",
   deviceName: "gdrive-vault-sync:device-name",
   stateDbId: "gdrive-vault-sync:state-db-id",
+  /** data.json に置くと、試行中は同期されず、他の端末へ切り替えが届かない。 */
+  trialMode: "gdrive-vault-sync:trial-mode",
 } as const;
 
 export class GDriveVaultSyncSettingTab extends PluginSettingTab {
@@ -52,7 +58,7 @@ export class GDriveVaultSyncSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("OAuth client secret")
-      .setDesc("省略できます。ログインで client_secret を求められたときだけ入れます。この端末にだけ保存します。")
+      .setDesc("デスクトップ アプリのクライアントのログインに必要です。この端末にだけ保存します。")
       .addText((text) => {
         text.inputEl.type = "password";
         text.setValue(app.loadLocalStorage(LocalKeys.clientSecret) ?? "").onChange((value) => {
@@ -76,6 +82,26 @@ export class GDriveVaultSyncSettingTab extends PluginSettingTab {
       .addText((text) =>
         text.setValue(this.plugin.deviceName()).onChange((value) => {
           app.saveLocalStorage(LocalKeys.deviceName, value.trim() || null);
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("同期の間隔（秒）")
+      .setDesc("起動時、保存の 10 秒後、この間隔ごとに自動で同期します。0 で自動同期を止めます。")
+      .addText((text) =>
+        text.setValue(String(this.plugin.settings.syncIntervalSec)).onChange(async (value) => {
+          this.plugin.settings.syncIntervalSec = Number(value);
+          await this.plugin.saveSettings();
+          this.plugin.restartAutoSync();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("試行モード")
+      .setDesc("計画をログに出すだけで、何も書き込みません。この端末にだけ保存します。")
+      .addToggle((toggle) =>
+        toggle.setValue(this.plugin.trialMode()).onChange((value) => {
+          app.saveLocalStorage(LocalKeys.trialMode, value || null);
         }),
       );
 

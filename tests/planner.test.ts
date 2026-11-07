@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { conflictPath } from "../src/sync/conflict";
+import { conflictPath, isConflictCopy } from "../src/sync/conflict";
 import {
   type BaseEntry,
   type LocalEntry,
@@ -269,5 +269,70 @@ describe("conflictPath", () => {
     expect(conflictPath("a.md", when, "Mac", (path) => taken.has(path))).toBe(
       "a (conflict 2026-01-02 0304 Mac 3).md",
     );
+  });
+});
+
+describe("Drive の同じパスのファイル（Q9）", () => {
+  const duplicates = (...entries: RemoteEntry[]) => new Map([[PATH, entries]]);
+  const withDuplicates = (...entries: RemoteEntry[]) =>
+    planOne(local("a"), remote("a"), base("a"), { duplicates: duplicates(...entries) });
+
+  it("内容が違うものは競合コピーの名前に変えて残す", () => {
+    expect(withDuplicates(remote("b", "r2"))).toEqual([
+      { type: "renameDuplicate", path: PATH, remoteId: "r2", conflictPath: conflictName },
+    ]);
+  });
+
+  it("採用した版と同じ内容なら、Drive のごみ箱へ移す", () => {
+    expect(withDuplicates(remote("a", "r2"))).toEqual([
+      { type: "trashDuplicate", path: PATH, remoteId: "r2" },
+    ]);
+  });
+
+  it("重複どうしが同じ内容なら、コピーは 1 つだけ作る", () => {
+    expect(withDuplicates(remote("b", "r2"), remote("b", "r3"))).toEqual([
+      { type: "renameDuplicate", path: PATH, remoteId: "r2", conflictPath: conflictName },
+      { type: "trashDuplicate", path: PATH, remoteId: "r3" },
+    ]);
+  });
+
+  it("3 つとも違えば、別の名前の競合コピーにする", () => {
+    const actions = withDuplicates(remote("b", "r2"), remote("c", "r3"));
+    const names = actions.map((action) => action.type === "renameDuplicate" && action.conflictPath);
+    expect(new Set(names).size).toBe(2);
+    expect(names).toContain(conflictName);
+    expect(names).toContain("note (conflict 2026-11-07 1630 Mac 2).md");
+  });
+
+  it("端末の判定は採用した版で別に行う", () => {
+    const actions = planOne(local("a"), remote("z"), base("a"), {
+      duplicates: duplicates(remote("b", "r2")),
+    });
+    expect(actions.map((action) => action.type)).toEqual(["download", "renameDuplicate"]);
+  });
+
+  it("除外したパスは触らない", () => {
+    const actions = planOne(local("a"), remote("a"), base("a"), {
+      duplicates: duplicates(remote("b", "r2")),
+      isExcluded: () => true,
+    });
+    expect(actions).toEqual([]);
+  });
+});
+
+describe("isConflictCopy", () => {
+  it("競合コピーの名前を見分ける", () => {
+    const when = new Date(2026, 10, 7, 16, 30);
+    expect(isConflictCopy(conflictPath("日記/note.md", when, "Mac"))).toBe(true);
+    expect(isConflictCopy(conflictPath("README", when, "Mac"))).toBe(true);
+    expect(isConflictCopy(conflictPath("a.md", when, "Mac", () => false))).toBe(true);
+    expect(isConflictCopy("note (conflict 2026-11-07 1630 Mac 2).md")).toBe(true);
+  });
+
+  it("普通の名前は競合コピーにしない", () => {
+    expect(isConflictCopy("note.md")).toBe(false);
+    expect(isConflictCopy("conflict の解消メモ.md")).toBe(false);
+    expect(isConflictCopy("note (conflict).md")).toBe(false);
+    expect(isConflictCopy("note (conflict 2026-11-07 1630 Mac)/a.md")).toBe(false);
   });
 });

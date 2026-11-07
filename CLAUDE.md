@@ -39,6 +39,7 @@ src/
     store.ts           前回状態（path → md5, size, mtime, remoteId, remoteMd5）と pageToken
   sync/
     planner.ts         3点比較で実行計画を作る純粋関数
+    scheduler.ts       自動同期の契機（起動時、一定間隔、保存後、復帰時）
     safety.ts          安全チェック（削除しきい値、空Vault、vaultId不一致）
     executor.ts        計画の実行（並列度3、操作ごとに前回状態を更新）
     conflict.ts        競合コピーの命名

@@ -324,6 +324,20 @@ export class DriveClient {
     return new Uint8Array(response.arrayBuffer);
   }
 
+  /** 内容を変えずに名前を変える。appProperties は渡したキーだけが更新される。 */
+  async renameFile(
+    id: string,
+    name: string,
+    appProperties: Record<string, string>,
+  ): Promise<void> {
+    await this.request({
+      url: `${API_BASE}/files/${encodeURIComponent(id)}?fields=id`,
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, appProperties }),
+    });
+  }
+
   /** ごみ箱へ移す。完全削除はしない。 */
   async trash(id: string): Promise<void> {
     await this.request({

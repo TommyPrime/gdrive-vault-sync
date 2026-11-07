@@ -25,6 +25,7 @@ import {
 } from "./settings";
 import { IndexedDbStateStore } from "./state/store";
 import { type EngineDeps, SyncEngine, type SyncOutcome } from "./sync/engine";
+import { AutoSync, intervalMs } from "./sync/scheduler";
 import { SyncLog } from "./ui/logView";
 import { reasonText, showPreview, summarize } from "./ui/previewModal";
 import { type SyncStatus, statusText } from "./ui/statusBar";
@@ -43,12 +44,21 @@ const http: HttpFn = async (request) => {
   };
 };
 
+type SyncMode = "manual" | "dry-run" | "auto";
+
 export default class GDriveVaultSyncPlugin extends Plugin {
   override settings: GDriveVaultSyncSettings = DEFAULT_SETTINGS;
   private readonly log = new SyncLog();
   private readonly engine = new SyncEngine(() => this.engineDeps());
+  private readonly autoSync = new AutoSync({
+    run: () => void this.sync("auto"),
+    intervalMs: () => intervalMs(this.settings.syncIntervalSec),
+  });
   private statusEl: HTMLElement | null = null;
   private store: IndexedDbStateStore | null = null;
+  /** 自動実行が同じ内容を毎回ログと通知に出さないよう、直前のものを覚える。 */
+  private lastPlanLog = "";
+  private lastAlert: string | null = null;
 
   override async onload(): Promise<void> {
     this.settings = { ...DEFAULT_SETTINGS, ...((await this.loadData()) as object | null) };
@@ -69,12 +79,12 @@ export default class GDriveVaultSyncPlugin extends Plugin {
     this.addCommand({
       id: "sync",
       name: "同期を実行",
-      callback: () => void this.sync(false),
+      callback: () => void this.sync("manual"),
     });
     this.addCommand({
       id: "dry-run",
       name: "試行（計画を見るだけで、何も書き込まない）",
-      callback: () => void this.sync(true),
+      callback: () => void this.sync("dry-run"),
     });
     this.addCommand({
       id: "verify",
@@ -86,10 +96,38 @@ export default class GDriveVaultSyncPlugin extends Plugin {
       name: "ログをコピー",
       callback: () => void this.copyLog(),
     });
+    this.addRibbonIcon("refresh-cw", "Drive と同期", () => void this.sync("manual"));
+
+    // 読み込み中の create を変更と数えないよう、画面の準備ができてから登録する。
+    this.app.workspace.onLayoutReady(() => {
+      // 同期が書いたファイルの通知で、もう一度同期しない。同期中の編集は次の定期実行が拾う。
+      const changed = () => {
+        if (!this.engine.isRunning) this.autoSync.changed();
+      };
+      this.registerEvent(this.app.vault.on("create", changed));
+      this.registerEvent(this.app.vault.on("modify", changed));
+      this.registerEvent(this.app.vault.on("delete", changed));
+      this.registerEvent(this.app.vault.on("rename", changed));
+      if (Platform.isMobile) {
+        this.registerDomEvent(document, "visibilitychange", () => {
+          if (document.visibilityState === "visible") this.autoSync.resumed();
+        });
+      }
+      this.autoSync.start();
+    });
   }
 
   override onunload(): void {
+    this.autoSync.stop();
     this.store?.close();
+  }
+
+  restartAutoSync(): void {
+    this.autoSync.restart();
+  }
+
+  trialMode(): boolean {
+    return this.app.loadLocalStorage(LocalKeys.trialMode) === true;
   }
 
   async saveSettings(): Promise<void> {
@@ -166,41 +204,76 @@ export default class GDriveVaultSyncPlugin extends Plugin {
     };
   }
 
-  private async sync(dryRun: boolean): Promise<void> {
+  private canSync(): boolean {
+    return this.oauthClient() !== null && this.isLoggedIn();
+  }
+
+  private async sync(mode: SyncMode): Promise<void> {
+    const auto = mode === "auto";
+    // ログイン前の端末では、自動実行は何も言わずに待つ。
+    if (auto && !this.canSync()) return;
+    const dryRun = mode === "dry-run" || this.trialMode();
+
     this.setStatus({ kind: "syncing" });
-    this.log.add(dryRun ? "試行を開始" : "同期を開始");
+    if (!auto) this.log.add(dryRun ? "試行を開始" : "同期を開始");
     try {
-      const outcome = await this.engine.run({ dryRun });
-      await this.report(outcome);
+      const outcome = await this.engine.run({ dryRun, interactive: !auto });
+      await this.report(outcome, auto);
     } catch (error) {
       this.setStatus({ kind: "error" });
-      this.log.add(`失敗: ${messageOf(error)}`);
-      new Notice(messageOf(error), 0);
+      // 自動実行の失敗は通信断が多い。次の実行で直るので、画面に残さない。
+      this.alert(`失敗: ${messageOf(error)}`, auto, !auto);
     }
   }
 
-  private async report(outcome: SyncOutcome): Promise<void> {
-    const { plan, safety, result, duplicates } = outcome;
-    for (const path of duplicates ?? []) {
-      this.log.add(`Drive に同じパスのファイルが複数あります: ${path}`);
+  /** 自動実行では、同じ内容を繰り返さない。手動なら毎回出す。 */
+  private alert(text: string, auto: boolean, sticky: boolean): void {
+    if (auto && this.lastAlert === text) return;
+    this.lastAlert = text;
+    this.log.add(text);
+    new Notice(text, sticky ? 0 : undefined);
+  }
+
+  private logPlan(outcome: SyncOutcome, auto: boolean): void {
+    const lines = [
+      ...(outcome.duplicates ?? []).map((path) => `Drive に同じパスのファイルが複数あります: ${path}`),
+      ...(outcome.plan?.actions ?? []).map((action) => `計画 ${action.type} ${action.path}`),
+    ];
+    const text = lines.join("\n");
+    if (auto && text === this.lastPlanLog) return;
+    this.lastPlanLog = text;
+    for (const line of lines) this.log.add(line);
+  }
+
+  private setIdle(conflicts: number): void {
+    this.setStatus({ kind: this.trialMode() ? "trial" : "idle", conflicts });
+  }
+
+  private async report(outcome: SyncOutcome, auto: boolean): Promise<void> {
+    const { plan, safety, result, conflictCopies = 0 } = outcome;
+    if (outcome.status === "busy") {
+      if (!auto) new Notice("同期はすでに実行中です");
+      return;
     }
-    if (plan) {
-      for (const action of plan.actions) this.log.add(`計画 ${action.type} ${action.path}`);
-    }
+    this.logPlan(outcome, auto);
 
     switch (outcome.status) {
-      case "busy":
-        new Notice("同期はすでに実行中です");
-        return;
       case "halted": {
         this.setStatus({ kind: "error" });
         const text = (safety?.reasons ?? []).map(reasonText).join("\n");
-        this.log.add(`停止: ${text}`);
-        new Notice(`同期を止めました。\n${text}`, 0);
+        this.alert(`同期を止めました。\n${text}`, auto, true);
+        return;
+      }
+      case "needs-confirm": {
+        this.setStatus({ kind: "waiting" });
+        const text = (safety?.reasons ?? []).map(reasonText).join("\n");
+        this.alert(`自動同期を止めました。\n${text}\n「同期を実行」で内容を確認してください。`, auto, true);
         return;
       }
       case "dry-run":
-        this.setStatus({ kind: "idle", conflicts: 0 });
+        this.lastAlert = null;
+        this.setIdle(conflictCopies);
+        if (auto) return;
         await showPreview(this.app, {
           title: "試行の結果（何も書き込んでいません）",
           plan: plan!,
@@ -209,7 +282,7 @@ export default class GDriveVaultSyncPlugin extends Plugin {
         });
         return;
       case "cancelled":
-        this.setStatus({ kind: "idle", conflicts: 0 });
+        this.setIdle(conflictCopies);
         new Notice("同期を中止しました");
         return;
       case "done": {
@@ -218,10 +291,16 @@ export default class GDriveVaultSyncPlugin extends Plugin {
           this.log.add(`失敗 ${action.type} ${action.path}: ${messageOf(error)}`);
         }
         for (const action of result?.skipped ?? []) this.log.add(`飛ばした ${action.path}`);
-        const conflicts = plan!.actions.filter((action) => action.type === "conflict").length;
-        this.setStatus(failed.length > 0 ? { kind: "error" } : { kind: "idle", conflicts });
-        const tail = failed.length > 0 ? `\n${failed.length} 件失敗しました` : "";
-        new Notice(`同期しました: ${summarize(plan!)}${tail}`, failed.length > 0 ? 0 : undefined);
+        if (failed.length > 0) {
+          this.setStatus({ kind: "error" });
+          this.alert(`同期しました: ${summarize(plan!)}\n${failed.length} 件失敗しました`, auto, true);
+          return;
+        }
+        this.lastAlert = null;
+        this.setIdle(conflictCopies);
+        // 自動実行は成功のたびに通知しない。競合だけは本人の作業が要るので知らせる。
+        const hasConflict = plan!.actions.some((action) => action.type === "conflict");
+        if (!auto || hasConflict) new Notice(`同期しました: ${summarize(plan!)}`);
         return;
       }
     }

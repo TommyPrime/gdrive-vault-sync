@@ -10,6 +10,12 @@ function safeDeviceName(deviceName: string): string {
   return replaced || "device";
 }
 
+const CONFLICT_COPY = / \(conflict \d{4}-\d{2}-\d{2} \d{4} [^/]+\)(\.[^/]*)?$/;
+
+export function isConflictCopy(path: string): boolean {
+  return CONFLICT_COPY.test(path);
+}
+
 /**
  * 競合コピーの名前を作る。`名前 (conflict YYYY-MM-DD HHmm 端末名).拡張子`
  * 同じ分に同じファイルが 2 度競合しても上書きしないよう、使用済みなら末尾に番号を足す。

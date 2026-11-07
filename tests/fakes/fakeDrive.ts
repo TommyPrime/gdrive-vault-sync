@@ -65,6 +65,13 @@ export class FakeDrive implements DriveBackend {
     this.log.push(id);
   }
 
+  /** 名前だけを変える。内容は変えない。 */
+  async rename(id: string, path: string): Promise<void> {
+    const file = this.mustGet(id);
+    file.path = path;
+    this.log.push(id);
+  }
+
   async readVault() {
     return { rootFound: this.rootFound, vaultId: this.rootFound ? this.vaultId : null };
   }

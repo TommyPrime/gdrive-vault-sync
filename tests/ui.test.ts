@@ -19,5 +19,8 @@ describe("statusText", () => {
     expect(statusText({ kind: "idle", conflicts: 2 })).toBe("Drive: 競合 2 件");
     expect(statusText({ kind: "syncing" })).toBe("Drive: 同期中");
     expect(statusText({ kind: "error" })).toBe("Drive: エラー");
+    expect(statusText({ kind: "waiting" })).toBe("Drive: 確認待ち");
+    expect(statusText({ kind: "trial", conflicts: 0 })).toBe("Drive: 試行中");
+    expect(statusText({ kind: "trial", conflicts: 1 })).toBe("Drive: 試行中 競合 1 件");
   });
 });

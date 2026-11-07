@@ -37,7 +37,11 @@ export type SyncAction =
   | { type: "trashLocal"; path: string; local: LocalEntry }
   | { type: "forget"; path: string }
   /** 編集中なので今回は触らない。 */
-  | { type: "deferred"; path: string };
+  | { type: "deferred"; path: string }
+  /** Drive に同じパスで別の内容がある。名前を変え、通常の新規として全端末へ届ける。 */
+  | { type: "renameDuplicate"; path: string; remoteId: string; conflictPath: string }
+  /** Drive に同じパスで同じ内容がある。 */
+  | { type: "trashDuplicate"; path: string; remoteId: string };
 
 export interface SyncPlan {
   actions: SyncAction[];
@@ -57,6 +61,8 @@ export interface PlanInput {
    */
   isExcluded?: (path: string) => boolean;
   recentEditMs?: number;
+  /** remote で採用しなかった、同じパスの Drive ファイル（spec-questions Q9）。 */
+  duplicates?: ReadonlyMap<string, readonly RemoteEntry[]>;
 }
 
 export const RECENT_EDIT_MS = 3_000;
@@ -120,6 +126,17 @@ export function plan(input: PlanInput): SyncPlan {
     return l.md5 === r.md5 ? { type: "record", path, local: l, remote: r } : conflict(path, l, r);
   };
 
+  const resolveDuplicates = (path: string): SyncAction[] => {
+    const seen = new Set([remote.get(path)?.md5]);
+    return (input.duplicates?.get(path) ?? []).map((entry) => {
+      if (seen.has(entry.md5)) return { type: "trashDuplicate", path, remoteId: entry.id };
+      seen.add(entry.md5);
+      const copy = conflictPath(path, when, deviceName, (candidate) => taken.has(candidate));
+      taken.add(copy);
+      return { type: "renameDuplicate", path, remoteId: entry.id, conflictPath: copy };
+    });
+  };
+
   const actions: SyncAction[] = [];
   let totalPaths = 0;
   for (const path of paths) {
@@ -127,6 +144,7 @@ export function plan(input: PlanInput): SyncPlan {
     totalPaths += 1;
     const action = decide(path);
     if (action) actions.push(action);
+    actions.push(...resolveDuplicates(path));
   }
   return { actions, totalPaths };
 }

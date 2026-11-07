@@ -260,6 +260,19 @@ describe("アップロード", () => {
 });
 
 describe("ごみ箱", () => {
+  it("名前の変更は名前と appProperties だけを送る", async () => {
+    const http = vi.fn<HttpFn>(async () => json(200, { id: "1" }));
+    await new DriveClient(http, token).renameFile("1", "新しい名前.md", { p0: "新しい名前.md" });
+
+    const request = http.mock.calls[0]![0];
+    expect(request.method).toBe("PATCH");
+    expect(new URL(request.url).pathname).toBe("/drive/v3/files/1");
+    expect(JSON.parse(request.body as string)).toEqual({
+      name: "新しい名前.md",
+      appProperties: { p0: "新しい名前.md" },
+    });
+  });
+
   it("trashed を立てるだけで、完全削除はしない", async () => {
     const http = vi.fn<HttpFn>(async () => json(200, { id: "1" }));
     await new DriveClient(http, token).trash("1");

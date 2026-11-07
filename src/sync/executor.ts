@@ -15,6 +15,8 @@ export interface RemotePort {
   download(id: string): Promise<Uint8Array>;
   /** id があれば更新し、無ければ作る。 */
   upload(path: string, data: Uint8Array, id?: string): Promise<RemoteEntry>;
+  /** 内容を変えずに、名前と appProperties のパスを変える。 */
+  rename(id: string, path: string): Promise<void>;
   /** `files.update({ trashed: true })` */
   trash(id: string): Promise<void>;
 }
@@ -101,6 +103,12 @@ export async function execute(
         return;
       case "forget":
         await state.delete(action.path);
+        return;
+      case "renameDuplicate":
+        await remote.rename(action.remoteId, action.conflictPath);
+        return;
+      case "trashDuplicate":
+        await remote.trash(action.remoteId);
         return;
       case "deferred":
         return;

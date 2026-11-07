@@ -93,6 +93,11 @@ export class GoogleDriveBackend implements DriveBackend {
     return this.toEntry(file);
   }
 
+  rename(id: string, path: string): Promise<void> {
+    const name = path.slice(path.lastIndexOf("/") + 1);
+    return this.client.renameFile(id, name, encodePathProps(path));
+  }
+
   trash(id: string): Promise<void> {
     return this.client.trash(id);
   }

@@ -143,3 +143,25 @@ describe("異常な状態（Q4）", () => {
     expect(result.reasons).toEqual(["vault-id-mismatch", "too-many-deletes"]);
   });
 });
+
+describe("重複の整理", () => {
+  it("ごみ箱へ移す重複も削除の件数に数える", () => {
+    const actions: SyncAction[] = Array.from({ length: 51 }, (_, i) => ({
+      type: "trashDuplicate",
+      path: `${i}.md`,
+      remoteId: `r${i}`,
+    }));
+    const result = evaluateSafety(input({ plan: planOf(actions, 100_000) }));
+    expect(result).toEqual({ decision: "confirm", reasons: ["too-many-deletes"] });
+  });
+
+  it("名前を変えるだけの重複は削除に数えない", () => {
+    const actions: SyncAction[] = Array.from({ length: 51 }, (_, i) => ({
+      type: "renameDuplicate",
+      path: `${i}.md`,
+      remoteId: `r${i}`,
+      conflictPath: `${i} (conflict).md`,
+    }));
+    expect(evaluateSafety(input({ plan: planOf(actions, 100) })).decision).toBe("proceed");
+  });
+});
