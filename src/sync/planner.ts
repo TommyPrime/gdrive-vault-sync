@@ -63,7 +63,7 @@ export interface PlanInput {
    */
   isExcluded?: (path: string) => boolean;
   recentEditMs?: number;
-  /** remote で採用しなかった、同じパスの Drive ファイル（spec-questions Q9）。 */
+  /** remote で採用しなかった、同じパスの Drive ファイル（内容が違えば名前を変え、同じならごみ箱へ移す）。 */
   duplicates?: ReadonlyMap<string, readonly RemoteEntry[]>;
   /**
    * これを超えるファイルは判定しない（モバイルの 50MB）。片方にしか無いことを削除と読むと、

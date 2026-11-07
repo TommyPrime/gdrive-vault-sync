@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "Obsidian plugin: two-way vault sync with Google Drive",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "node esbuild.config.mjs",

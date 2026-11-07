@@ -64,7 +64,7 @@ export function escapeQueryValue(value: string): string {
 
 /**
  * Drive API v3 のラッパー。
- * files.delete は実装しない（CLAUDE.md「してはいけないこと」）。
+ * files.delete は実装しない。完全削除はせず、ごみ箱へ移すだけにする。
  */
 export class DriveClient {
   constructor(

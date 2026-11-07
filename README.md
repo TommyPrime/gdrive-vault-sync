@@ -1,18 +1,82 @@
 # GDrive Vault Sync
 
-Obsidian の Vault を自分の Google Drive と双方向同期する個人用プラグイン。
-macOS / Windows / iPadOS / Android の 4 台で 1 つの Vault を使う。
+Obsidian の Vault を、自分の Google Drive と双方向に同期するプラグインです。
+Mac、Windows、iPad、Android で 1 つの Vault を使うために作っています。
 
-- 正の仕様: 「Obsidian マルチデバイス構成 設計書」第 4 章
-- 開発の決まり: [CLAUDE.md](CLAUDE.md)
-- 段階 0 の本人作業: [docs/setup.md](docs/setup.md)
-- 仕様の確認事項: [docs/spec-questions.md](docs/spec-questions.md)
+> [!WARNING]
+> **開発中です。** 作者のテスト用の Vault で検証している段階で、普段使いの Vault での動作はまだ確認していません。
+> 試すときは、必ず別に作ったテスト用の Vault を使い、大事なノートにはバックアップを取ってください。
+> 利用は自己責任でお願いします。
 
-**現在は段階 0。同期はまだ実装していない。** できるのは Google へのログインと、Drive のフォルダ作成だけ。
-本番の Vault に入れないこと。
+## できること
+
+- ノートと添付ファイルを、Google Drive のマイドライブの `Obsidian/<Vault 名>/` へ、Vault と同じ構成で同期します。
+- `.obsidian` の設定とプラグインも同期します。
+- 起動時、一定の間隔（既定は 60 秒）、保存の 10 秒後に自動で同期します。モバイルは画面に戻ったときにも同期します。
+- 同じファイルを 2 台で変えたときは、両方を残します。Drive 側を正式な名前で取り込み、端末側は `名前 (conflict 日時 端末名).md` として残します。
+- 削除は完全には消しません。Drive はごみ箱へ、端末は Vault の `.trash/` へ移します。
+
+## 安全のための仕組み
+
+- 初回の同期は、内容を確認画面で承認するまで何もしません。
+- 削除の予定が全体の 10% または 50 件を超えると、止まって確認を求めます。
+- 端末側が空になっている、Drive のフォルダが見つからない、別の Vault の Drive フォルダを指している、のどれかなら止まります。
+- 試行モードでは、計画をログに出すだけで何も書き込みません。
+- Obsidian の外（エディタやスクリプト）で編集したファイルも、内容のハッシュで変更を拾います。
+
+## Google アカウントとデータ
+
+- 使う権限は `https://www.googleapis.com/auth/drive.file` だけです。このプラグインが作ったファイルとフォルダ以外は読めません。
+- 通信先は Google のサービスだけです。作者や第三者のサーバーは経由しません。
+- ログインのトークンと同期の状態は、端末の中にだけ保存します。Vault には書きません。
+- **Google Cloud の OAuth クライアントは、利用者が自分で作ります。** このリポジトリにクライアント ID やシークレットは含まれていません。
+
+## 必要なもの
+
+- Obsidian 1.8.7 以降
+- Google アカウント
+- Google Cloud のプロジェクトと、種類が「デスクトップ アプリ」の OAuth クライアント（無料で作れます）
+
+## 導入
+
+手順は [docs/setup.md](docs/setup.md) にあります。おおまかな流れは次のとおりです。
+
+1. Google Cloud で OAuth クライアントを作る。
+2. [BRAT](https://github.com/TfTHacker/obsidian42-brat) で `TommyPrime/gdrive-vault-sync` を追加してインストールする。
+3. デスクトップでクライアント ID とシークレットを入れてログインする。
+4. モバイルは、デスクトップの設定画面に表示した「モバイル用トークン」を貼り付けて接続する。
+
+## 制限
+
+- **名前の変更は「削除と新規作成」として扱います。** 他の端末では、古い名前のファイルが `.trash/` へ移り、新しい名前のファイルが作られます。
+- **新しい端末をつなぐと、`.obsidian` の中に競合コピーができることがあります。** Obsidian が新しい Vault に既定の設定を作るためです。
+- **モバイルは、Obsidian を開いている間だけ同期します。** バックグラウンドでは同期しません。
+- **モバイルでは 50MB を超えるファイルを同期しません。** 上限は設定で変えられます。
+- **モバイルにはステータスバーがありません。** 同期の状態は設定画面の先頭に出ます。
+- **Markdown の自動マージはしません。** 競合は両方を残します。
+
+## モバイル用トークンの扱い
+
+モバイル用トークンには、OAuth のクライアント ID、シークレット、リフレッシュトークンが入っています。
+見た人は、あなたの Drive のうち、このプラグインのファイルに接続できます。写真に残したり、チャットやメールに貼ったりしないでください。
+漏れた場合は、Google アカウントの「サードパーティ製のアプリとサービス」でアクセスを取り消してください。
+
+## 開発
 
 ```bash
 npm install
-npm test
-npm run lint
+npm test       # Vitest
+npm run lint   # 型検査と ESLint
+npm run dev    # テスト用 Vault の .obsidian/plugins/ へビルドし続ける
+npm run build  # 配布用の main.js
 ```
+
+`npm run make-test-vault` で、ダミーのノート 200 件と画像・PDF を含むテスト用 Vault を `_test-vault/` に作れます。
+
+## プライバシーポリシー
+
+[プライバシーポリシー](https://tommyprime.github.io/vault-sync-site/privacy.html)（Google のログイン画面では「Vault Sync」と表示されます）
+
+## ライセンス
+
+[MIT](LICENSE)

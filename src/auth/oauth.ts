@@ -10,7 +10,7 @@ const EXPIRY_MARGIN_MS = 60_000;
 
 export interface OAuthClient {
   clientId: string;
-  /** 省略可。docs/spec-questions.md Q2 を参照。 */
+  /** Google は PKCE なら省略可とするが、デスクトップ アプリのクライアントでは無いとログインが完了しなかった。 */
   clientSecret?: string;
 }
 

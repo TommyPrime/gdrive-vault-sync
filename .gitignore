@@ -16,3 +16,8 @@ data.json
 coverage/
 .DS_Store
 /.obsidian/
+
+# 開発用の文書。公開しない（この Mac の中だけに置く）
+/CLAUDE.md
+/docs/spec-questions.md
+/docs/stages.md
