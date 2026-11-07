@@ -10,6 +10,18 @@ export interface VaultAdapter extends ScanAdapter {
   trashLocal(path: string): Promise<void>;
 }
 
+/**
+ * パスは Drive からも届く。Vault の外を指すものは、走査や判定ではなく、ここで止める。
+ * 判定で無視すると「Drive から消えた」と読まれ、端末のファイルが移動される経路ができる。
+ * Windows の区切りも見るので、macOS で書けるパスにも `\` を区切りとして適用する。
+ */
+function assertInsideVault(path: string): void {
+  const absolute = /^[/\\]/.test(path) || /^[A-Za-z]:[/\\]/.test(path);
+  if (absolute || path.split(/[/\\]/).includes("..")) {
+    throw new Error(`Vault の外を指すパスです: ${path}`);
+  }
+}
+
 function toArrayBuffer(data: Uint8Array): ArrayBuffer {
   return data.slice().buffer as ArrayBuffer;
 }
@@ -21,10 +33,12 @@ export class VaultPort implements LocalPort {
   ) {}
 
   async read(path: string): Promise<Uint8Array> {
+    assertInsideVault(path);
     return new Uint8Array(await this.adapter.readBinary(path));
   }
 
   async write(path: string, data: Uint8Array): Promise<LocalEntry> {
+    assertInsideVault(path);
     await this.ensureParents(path);
     const buffer = toArrayBuffer(data);
     await this.adapter.writeBinary(path, buffer);
@@ -34,11 +48,13 @@ export class VaultPort implements LocalPort {
   }
 
   async md5(path: string): Promise<string | null> {
+    assertInsideVault(path);
     if (!(await this.adapter.exists(path))) return null;
     return this.hash(await this.adapter.readBinary(path));
   }
 
-  trash(path: string): Promise<void> {
+  async trash(path: string): Promise<void> {
+    assertInsideVault(path);
     return this.adapter.trashLocal(path);
   }
 

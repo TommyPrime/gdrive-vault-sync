@@ -56,4 +56,48 @@ describe("VaultPort", () => {
     await new VaultPort(adapter, md5OfBuffer).trash("a.md");
     expect(adapter.trashLocal).toHaveBeenCalledWith("a.md");
   });
+
+  describe("Vault の外を指すパス", () => {
+    const outside = [
+      "../outside.md",
+      "a/../../outside.md",
+      "a/..",
+      "..\\outside.md",
+      "a\\..\\..\\outside.md",
+      "/etc/outside.md",
+      "\\outside.md",
+      "C:\\outside.md",
+      "C:/outside.md",
+    ];
+
+    it.each(outside)("%s は書かない", async (path) => {
+      const { adapter, files } = fakeAdapter();
+      const port = new VaultPort(adapter, md5OfBuffer);
+      await expect(port.write(path, new Uint8Array([1]))).rejects.toThrow("Vault の外");
+      expect(files.size).toBe(0);
+      expect(adapter.mkdir).not.toHaveBeenCalled();
+    });
+
+    it.each(outside)("%s は読まず、移動もしない", async (path) => {
+      const { adapter } = fakeAdapter();
+      const port = new VaultPort(adapter, md5OfBuffer);
+      await expect(port.read(path)).rejects.toThrow("Vault の外");
+      await expect(port.md5(path)).rejects.toThrow("Vault の外");
+      await expect(port.trash(path)).rejects.toThrow("Vault の外");
+      expect(adapter.trashLocal).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      "a..b.md",
+      "..hidden/a.md",
+      "a/b..md",
+      ".obsidian/plugins/a/main.js",
+      "日本語/濁点ガギグ.md",
+      "a\\b.md",
+    ])("%s は Vault の中なので通す", async (path) => {
+      const { adapter, files } = fakeAdapter();
+      await new VaultPort(adapter, md5OfBuffer).write(path, new Uint8Array([1]));
+      expect(files.has(path)).toBe(true);
+    });
+  });
 });
