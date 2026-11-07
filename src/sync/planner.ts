@@ -47,6 +47,8 @@ export interface SyncPlan {
   actions: SyncAction[];
   /** 除外を除いたパスの数。削除の割合の分母になる。 */
   totalPaths: number;
+  /** 大きいので判定しなかったパス。 */
+  skipped: string[];
 }
 
 export interface PlanInput {
@@ -63,9 +65,18 @@ export interface PlanInput {
   recentEditMs?: number;
   /** remote で採用しなかった、同じパスの Drive ファイル（spec-questions Q9）。 */
   duplicates?: ReadonlyMap<string, readonly RemoteEntry[]>;
+  /**
+   * これを超えるファイルは判定しない（モバイルの 50MB）。片方にしか無いことを削除と読むと、
+   * 他の端末のファイルをごみ箱へ移してしまうので、除外と同じ扱いにする。
+   */
+  maxFileSize?: number;
 }
 
 export const RECENT_EDIT_MS = 3_000;
+
+export function exceedsLimit(size: number | undefined, limit: number | undefined): boolean {
+  return size !== undefined && limit !== undefined && size > limit;
+}
 
 export function plan(input: PlanInput): SyncPlan {
   const { local, remote, base, now, deviceName } = input;
@@ -137,14 +148,23 @@ export function plan(input: PlanInput): SyncPlan {
     });
   };
 
+  const isTooLarge = (path: string) =>
+    exceedsLimit(local.get(path)?.size, input.maxFileSize) ||
+    exceedsLimit(remote.get(path)?.size, input.maxFileSize);
+
   const actions: SyncAction[] = [];
+  const skipped: string[] = [];
   let totalPaths = 0;
   for (const path of paths) {
     if (isExcluded(path)) continue;
+    if (isTooLarge(path)) {
+      skipped.push(path);
+      continue;
+    }
     totalPaths += 1;
     const action = decide(path);
     if (action) actions.push(action);
     actions.push(...resolveDuplicates(path));
   }
-  return { actions, totalPaths };
+  return { actions, totalPaths, skipped };
 }

@@ -15,7 +15,7 @@ const deletes = (count: number): SyncAction[] =>
       : { type: "trashLocal", path: `${i}.md`, local: localEntry },
   );
 
-const planOf = (actions: SyncAction[], totalPaths: number): SyncPlan => ({ actions, totalPaths });
+const planOf = (actions: SyncAction[], totalPaths: number): SyncPlan => ({ actions, totalPaths, skipped: [] });
 
 function input(overrides: Partial<SafetyInput> = {}): SafetyInput {
   return {

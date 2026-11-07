@@ -1,6 +1,13 @@
 import { isConflictCopy } from "./conflict";
 import { type ExecutionResult, type LocalPort, type RemotePort, execute } from "./executor";
-import { type BaseEntry, type LocalEntry, type RemoteEntry, type SyncPlan, plan } from "./planner";
+import {
+  type BaseEntry,
+  type LocalEntry,
+  type RemoteEntry,
+  type SyncPlan,
+  exceedsLimit,
+  plan,
+} from "./planner";
 import { type DeleteThresholds, type SafetyResult, evaluateSafety } from "./safety";
 
 export interface RemoteFile extends RemoteEntry {
@@ -50,6 +57,8 @@ export interface EngineDeps {
   now(): number;
   deviceName: string;
   isExcluded?: (path: string) => boolean;
+  /** これを超えるファイルは同期しない。モバイルだけが渡す。 */
+  maxFileSize?: number;
   thresholds?: DeleteThresholds;
   newVaultId(): string;
   /** プレビューで承認されたら true。 */
@@ -164,6 +173,7 @@ export class SyncEngine {
       deviceName: deps.deviceName,
       isExcluded: deps.isExcluded,
       duplicates,
+      maxFileSize: deps.maxFileSize,
     });
     const safety = evaluateSafety({
       plan: syncPlan,
@@ -208,16 +218,20 @@ export class SyncEngine {
     const { byPath } = toPathMap(new Map(files.map((file) => [file.id, file])));
     const isExcluded = deps.isExcluded ?? (() => false);
 
+    const skipped = (path: string) =>
+      exceedsLimit(local.get(path)?.size, deps.maxFileSize) ||
+      exceedsLimit(byPath.get(path)?.size, deps.maxFileSize);
+
     const report: VerifyReport = { matched: 0, localOnly: [], remoteOnly: [], different: [] };
     for (const [path, entry] of local) {
-      if (isExcluded(path)) continue;
+      if (isExcluded(path) || skipped(path)) continue;
       const remote = byPath.get(path);
       if (!remote) report.localOnly.push(path);
       else if (remote.md5 === entry.md5) report.matched += 1;
       else report.different.push(path);
     }
     for (const path of byPath.keys()) {
-      if (!local.has(path) && !isExcluded(path)) report.remoteOnly.push(path);
+      if (!local.has(path) && !isExcluded(path) && !skipped(path)) report.remoteOnly.push(path);
     }
     return report;
   }

@@ -1,4 +1,4 @@
-import type { BaseEntry, LocalEntry } from "../sync/planner";
+import { type BaseEntry, type LocalEntry, exceedsLimit } from "../sync/planner";
 
 export const DEFAULT_EXCLUDES = [
   ".git/**",
@@ -8,6 +8,14 @@ export const DEFAULT_EXCLUDES = [
   ".obsidian/cache/**",
   "**/node_modules/**",
 ];
+
+export const DEFAULT_MOBILE_MAX_MB = 50;
+
+/** 壊れた値で上限が外れないよう、既定値に戻す。 */
+export function mobileMaxBytes(megabytes: unknown): number {
+  const valid = typeof megabytes === "number" && Number.isFinite(megabytes) && megabytes > 0;
+  return (valid ? megabytes : DEFAULT_MOBILE_MAX_MB) * 1024 * 1024;
+}
 
 /** Obsidian の DataAdapter のうち、走査に使う部分。 */
 export interface ScanAdapter {
@@ -52,6 +60,8 @@ export async function scanVault(
     isExcluded: (path: string) => boolean;
     base: ReadonlyMap<string, BaseEntry>;
     hash: (data: ArrayBuffer) => string;
+    /** 超えるファイルは読まない。消えたと読まれないよう、結果には残す。planner が判定から外す。 */
+    maxFileSize?: number;
   },
 ): Promise<Map<string, LocalEntry>> {
   const result = new Map<string, LocalEntry>();
@@ -68,6 +78,10 @@ export async function scanVault(
       const stat = await adapter.stat(path);
       if (!stat) continue;
       const known = options.base.get(path);
+      if (exceedsLimit(stat.size, options.maxFileSize)) {
+        result.set(path, { md5: known?.md5 ?? "", size: stat.size, mtime: stat.mtime });
+        continue;
+      }
       const md5 =
         known && known.size === stat.size && known.mtime === stat.mtime
           ? known.md5

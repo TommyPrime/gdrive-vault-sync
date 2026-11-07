@@ -50,6 +50,7 @@ class Device {
     private readonly name: string,
     private readonly drive: FakeDrive,
     private readonly clock: Clock,
+    maxFileSize?: number,
   ) {
     this.vault = new FakeVault(clock);
     this.engine = new SyncEngine(() => ({
@@ -59,6 +60,7 @@ class Device {
       scan: async () => this.vault.scan(),
       now: () => this.clock.now,
       deviceName: this.name,
+      maxFileSize,
       newVaultId: () => "vault-1",
       confirm: async () => {
         this.confirmCalls += 1;
@@ -110,6 +112,46 @@ describe("複数端末", () => {
   }
 
   const driveHas = (path: string) => drive.list().has(path);
+
+  describe("モバイルの大きいファイル", () => {
+    const big = "x".repeat(20);
+
+    it("受け取らないが、Drive からも Mac からも消さない", async () => {
+      const mobile = new Device("iPad", drive, clock, 10);
+      await connectBoth({ "big.bin": big, "a.md": "1" });
+
+      const { plan: first } = await mobile.sync({ approve: true });
+      expect(first?.skipped).toEqual(["big.bin"]);
+      expect(mobile.vault.snapshot()).toEqual({ "a.md": "1" });
+
+      await mobile.sync();
+      await a.sync();
+      expect(driveHas("big.bin")).toBe(true);
+      expect(a.vault.text("big.bin")).toBe(big);
+      expect(drive.trashedPaths()).toEqual([]);
+    });
+
+    it("照合で差分に数えない", async () => {
+      const mobile = new Device("iPad", drive, clock, 10);
+      await connectBoth({ "big.bin": big, "a.md": "1" });
+      await mobile.sync({ approve: true });
+
+      const report = await mobile.verify();
+      expect(report).toMatchObject({ matched: 1, localOnly: [], remoteOnly: [], different: [] });
+    });
+
+    it("モバイルで作った大きいファイルは上げず、端末に残す", async () => {
+      const mobile = new Device("iPad", drive, clock, 10);
+      await connectBoth({ "a.md": "1" });
+      await mobile.sync({ approve: true });
+
+      mobile.vault.edit("big.bin", big);
+      await mobile.sync();
+      expect(driveHas("big.bin")).toBe(false);
+      expect(mobile.vault.text("big.bin")).toBe(big);
+      expect((await mobile.verify()).localOnly).toEqual([]);
+    });
+  });
 
   it("初回は承認されるまで何も書かない", async () => {
     a.vault.edit("a.md", "1");

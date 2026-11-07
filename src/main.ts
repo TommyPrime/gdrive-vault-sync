@@ -11,11 +11,12 @@ import {
   randomUrlSafe,
 } from "./auth/oauth";
 import type { LoopbackSession } from "./auth/desktopLoopback";
+import { decodeMobileToken, encodeMobileToken, toStoredTokens } from "./auth/mobileToken";
 import { GoogleDriveBackend } from "./drive/backend";
 import { DriveClient, isQuotaError } from "./drive/client";
 import type { HttpFn } from "./http";
 import { md5OfBuffer } from "./local/md5";
-import { DEFAULT_EXCLUDES, compileExcludes, scanVault } from "./local/scanner";
+import { DEFAULT_EXCLUDES, compileExcludes, mobileMaxBytes, scanVault } from "./local/scanner";
 import { type VaultAdapter, VaultPort } from "./local/vaultPort";
 import {
   DEFAULT_SETTINGS,
@@ -27,6 +28,7 @@ import { IndexedDbStateStore } from "./state/store";
 import { type EngineDeps, SyncEngine, type SyncOutcome } from "./sync/engine";
 import { AutoSync, intervalMs } from "./sync/scheduler";
 import { SyncLog } from "./ui/logView";
+import { MobileTokenModal } from "./ui/mobileTokenModal";
 import { reasonText, showPreview, summarize } from "./ui/previewModal";
 import { type SyncStatus, statusText } from "./ui/statusBar";
 
@@ -55,6 +57,8 @@ export default class GDriveVaultSyncPlugin extends Plugin {
     intervalMs: () => intervalMs(this.settings.syncIntervalSec),
   });
   private statusEl: HTMLElement | null = null;
+  /** モバイルにはステータスバーが無いので、設定画面に出すために覚える。 */
+  private status: SyncStatus = { kind: "idle", conflicts: 0 };
   private store: IndexedDbStateStore | null = null;
   /** 自動実行が同じ内容を毎回ログと通知に出さないよう、直前のものを覚える。 */
   private lastPlanLog = "";
@@ -149,7 +153,18 @@ export default class GDriveVaultSyncPlugin extends Plugin {
   }
 
   private setStatus(status: SyncStatus): void {
+    this.status = status;
     this.statusEl?.setText(statusText(status));
+  }
+
+  statusLabel(): string {
+    return statusText(this.status);
+  }
+
+  /** 設定は端末ごと。モバイルでなければ上限は無い。 */
+  private maxFileSize(): number | undefined {
+    if (!Platform.isMobile) return undefined;
+    return mobileMaxBytes(this.app.loadLocalStorage(LocalKeys.mobileMaxMb));
   }
 
   private driveClient(client: OAuthClient): DriveClient {
@@ -176,6 +191,7 @@ export default class GDriveVaultSyncPlugin extends Plugin {
 
     const adapter = this.app.vault.adapter as unknown as VaultAdapter;
     const isExcluded = compileExcludes(DEFAULT_EXCLUDES);
+    const maxFileSize = this.maxFileSize();
     return {
       store: this.stateStore(),
       drive: new GoogleDriveBackend(
@@ -184,10 +200,11 @@ export default class GDriveVaultSyncPlugin extends Plugin {
         this.app.vault.getName(),
       ),
       local: new VaultPort(adapter, md5OfBuffer),
-      scan: (base) => scanVault(adapter, { isExcluded, base, hash: md5OfBuffer }),
+      scan: (base) => scanVault(adapter, { isExcluded, base, hash: md5OfBuffer, maxFileSize }),
       now: () => Date.now(),
       deviceName: this.deviceName(),
       isExcluded,
+      maxFileSize,
       thresholds: {
         deleteRatio: this.settings.deleteRatio,
         deleteCount: this.settings.deleteCount,
@@ -238,6 +255,7 @@ export default class GDriveVaultSyncPlugin extends Plugin {
     const lines = [
       ...(outcome.duplicates ?? []).map((path) => `Drive に同じパスのファイルが複数あります: ${path}`),
       ...(outcome.plan?.actions ?? []).map((action) => `計画 ${action.type} ${action.path}`),
+      ...(outcome.plan?.skipped ?? []).map((path) => `大きいので飛ばした ${path}`),
     ];
     const text = lines.join("\n");
     if (auto && text === this.lastPlanLog) return;
@@ -346,7 +364,7 @@ export default class GDriveVaultSyncPlugin extends Plugin {
 
   async login(): Promise<void> {
     if (!Platform.isDesktopApp) {
-      new Notice("モバイルでのログインは今後の段階で対応します");
+      new Notice("モバイルでは、デスクトップで表示したトークンを貼り付けてください");
       return;
     }
     const client = this.oauthClient();
@@ -382,6 +400,35 @@ export default class GDriveVaultSyncPlugin extends Plugin {
       new Notice(messageOf(error), 0);
     } finally {
       loopback?.close();
+    }
+  }
+
+  /** デスクトップのログインを、モバイルへ渡す文字列にして見せる。 */
+  showMobileToken(): void {
+    const client = this.oauthClient();
+    const tokens = this.tokenStore.load();
+    if (!client || !tokens) {
+      new Notice("先に Google にログインしてください");
+      return;
+    }
+    new MobileTokenModal(
+      this.app,
+      encodeMobileToken({ ...client, refreshToken: tokens.refreshToken }),
+    ).open();
+  }
+
+  /** 成功したら true。途中までの値を残さないよう、読み終えてから保存する。 */
+  importMobileToken(text: string): boolean {
+    try {
+      const token = decodeMobileToken(text);
+      this.app.saveLocalStorage(LocalKeys.clientId, token.clientId);
+      this.app.saveLocalStorage(LocalKeys.clientSecret, token.clientSecret ?? null);
+      this.tokenStore.save(toStoredTokens(token));
+      new Notice("接続しました");
+      return true;
+    } catch (error) {
+      new Notice(messageOf(error), 0);
+      return false;
     }
   }
 

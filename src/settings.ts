@@ -1,5 +1,6 @@
-import { App, PluginSettingTab, Setting } from "obsidian";
+import { App, Platform, PluginSettingTab, Setting } from "obsidian";
 import type GDriveVaultSyncPlugin from "./main";
+import { DEFAULT_MOBILE_MAX_MB } from "./local/scanner";
 import { DEFAULT_THRESHOLDS } from "./sync/safety";
 import { DEFAULT_INTERVAL_SEC } from "./sync/scheduler";
 
@@ -33,6 +34,7 @@ export const LocalKeys = {
   stateDbId: "gdrive-vault-sync:state-db-id",
   /** data.json に置くと、試行中は同期されず、他の端末へ切り替えが届かない。 */
   trialMode: "gdrive-vault-sync:trial-mode",
+  mobileMaxMb: "gdrive-vault-sync:mobile-max-mb",
 } as const;
 
 export class GDriveVaultSyncSettingTab extends PluginSettingTab {
@@ -47,24 +49,11 @@ export class GDriveVaultSyncSettingTab extends PluginSettingTab {
     const { containerEl, app } = this;
     containerEl.empty();
 
-    new Setting(containerEl)
-      .setName("OAuth client ID")
-      .setDesc("Google Cloud で作った「デスクトップ アプリ」のクライアント ID。この端末にだけ保存します。")
-      .addText((text) =>
-        text.setValue(app.loadLocalStorage(LocalKeys.clientId) ?? "").onChange((value) => {
-          app.saveLocalStorage(LocalKeys.clientId, value.trim() || null);
-        }),
-      );
-
-    new Setting(containerEl)
-      .setName("OAuth client secret")
-      .setDesc("デスクトップ アプリのクライアントのログインに必要です。この端末にだけ保存します。")
-      .addText((text) => {
-        text.inputEl.type = "password";
-        text.setValue(app.loadLocalStorage(LocalKeys.clientSecret) ?? "").onChange((value) => {
-          app.saveLocalStorage(LocalKeys.clientSecret, value.trim() || null);
-        });
-      });
+    if (Platform.isMobile) {
+      // モバイルにはステータスバーが無い。
+      new Setting(containerEl).setName("同期の状態").setDesc(this.plugin.statusLabel());
+    }
+    if (Platform.isDesktopApp) this.displayClient();
 
     new Setting(containerEl)
       .setName("Drive のフォルダ名")
@@ -126,16 +115,30 @@ export class GDriveVaultSyncSettingTab extends PluginSettingTab {
       );
 
     const loggedIn = this.plugin.isLoggedIn();
-    new Setting(containerEl)
-      .setName("Google アカウント")
-      .setDesc(loggedIn ? "ログイン済みです。" : "ログインしていません。")
-      .addButton((button) =>
-        button.setButtonText(loggedIn ? "ログアウト" : "ログイン").onClick(async () => {
-          if (loggedIn) this.plugin.logout();
-          else await this.plugin.login();
-          this.display();
-        }),
-      );
+    if (Platform.isMobile) this.displayMobile();
+
+    // モバイルはログインできない。接続は上のトークンの貼り付けで行う。
+    if (Platform.isDesktopApp || loggedIn) {
+      new Setting(containerEl)
+        .setName("Google アカウント")
+        .setDesc(loggedIn ? "ログイン済みです。" : "ログインしていません。")
+        .addButton((button) =>
+          button.setButtonText(loggedIn ? "ログアウト" : "ログイン").onClick(async () => {
+            if (loggedIn) this.plugin.logout();
+            else await this.plugin.login();
+            this.display();
+          }),
+        );
+    }
+
+    if (Platform.isDesktopApp) {
+      new Setting(containerEl)
+        .setName("モバイル用トークン")
+        .setDesc("モバイルの接続に使う QR と文字列を表示します。見た人は Drive に接続できます。")
+        .addButton((button) =>
+          button.setButtonText("表示").onClick(() => this.plugin.showMobileToken()),
+        );
+    }
 
     new Setting(containerEl)
       .setName("接続の確認")
@@ -145,5 +148,54 @@ export class GDriveVaultSyncSettingTab extends PluginSettingTab {
           await this.plugin.checkConnection();
         }),
       );
+  }
+
+  private displayMobile(): void {
+    const { containerEl, app } = this;
+    let pasted = "";
+    new Setting(containerEl)
+      .setName("モバイル用トークン")
+      .setDesc("デスクトップの設定画面に表示した文字列を貼り付けます。")
+      .addText((text) => {
+        text.inputEl.type = "password";
+        text.onChange((value) => (pasted = value));
+      })
+      .addButton((button) =>
+        button.setButtonText("接続").onClick(() => {
+          if (this.plugin.importMobileToken(pasted)) this.display();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("同期しないサイズ（MB）")
+      .setDesc("これより大きいファイルは、このモバイルでは同期しません。この端末にだけ保存します。")
+      .addText((text) => {
+        const saved = app.loadLocalStorage(LocalKeys.mobileMaxMb) as number | null;
+        text.setValue(String(saved ?? DEFAULT_MOBILE_MAX_MB)).onChange((value) => {
+          app.saveLocalStorage(LocalKeys.mobileMaxMb, Number(value));
+        });
+      });
+  }
+
+  private displayClient(): void {
+    const { containerEl, app } = this;
+    new Setting(containerEl)
+      .setName("OAuth client ID")
+      .setDesc("Google Cloud で作った「デスクトップ アプリ」のクライアント ID。この端末にだけ保存します。")
+      .addText((text) =>
+        text.setValue(app.loadLocalStorage(LocalKeys.clientId) ?? "").onChange((value) => {
+          app.saveLocalStorage(LocalKeys.clientId, value.trim() || null);
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("OAuth client secret")
+      .setDesc("デスクトップ アプリのクライアントのログインに必要です。この端末にだけ保存します。")
+      .addText((text) => {
+        text.inputEl.type = "password";
+        text.setValue(app.loadLocalStorage(LocalKeys.clientSecret) ?? "").onChange((value) => {
+          app.saveLocalStorage(LocalKeys.clientSecret, value.trim() || null);
+        });
+      });
   }
 }
