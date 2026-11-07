@@ -1,0 +1,18 @@
+node_modules/
+main.js
+*.map
+data.json
+
+# 認証情報は絶対にコミットしない
+.env
+.env.*
+
+# テスト用 Vault は scripts/make-test-vault.mjs で作る
+/_test-vault/
+/_test-vault-2/
+# 参照用に取得した NSync（実行しない・コミットしない）
+/reference/
+
+coverage/
+.DS_Store
+/.obsidian/
